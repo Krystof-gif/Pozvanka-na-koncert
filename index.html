@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>SPACE KONCERT</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:#000;width:100%;height:100%;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{display:block;width:100%;height:100%}
+/* Only the end-screen needs DOM for clickable buttons */
+#end-screen{position:absolute;top:0;left:0;width:100%;height:100%;display:none;flex-direction:column;justify-content:center;align-items:center;z-index:10;background:rgba(0,0,0,0.92);font-family:'Courier New',monospace;color:#fff;text-align:center;padding:20px}
+#end-screen.visible{display:flex}
+#end-screen .box{border:2px solid #ff0040;box-shadow:0 0 60px rgba(255,0,64,0.4);border-radius:12px;padding:clamp(20px,5vw,40px);max-width:500px}
+#end-screen h1{font-size:clamp(28px,8vw,48px);color:#ff0040;text-shadow:0 0 30px #ff0040;margin-bottom:8px;letter-spacing:4px}
+#end-screen .venue{font-size:clamp(22px,6vw,36px);color:#ffd700;text-shadow:0 0 20px #ffd700;margin-bottom:20px;letter-spacing:3px}
+#end-screen .fscore{font-size:16px;color:#0ff;margin-bottom:15px}
+#end-screen .question{font-size:clamp(14px,4vw,20px);color:#ccc;margin-bottom:20px}
+#end-screen .dates{display:flex;gap:15px;justify-content:center;margin-bottom:15px;flex-wrap:wrap}
+.date-btn{font-family:'Courier New',monospace;font-size:clamp(20px,5vw,28px);padding:12px 30px;border:2px solid #0ff;background:transparent;color:#0ff;cursor:pointer;letter-spacing:2px;text-shadow:0 0 10px #0ff;transition:all .3s}
+.date-btn:hover,.date-btn:active{background:#0ff;color:#000;box-shadow:0 0 30px #0ff}
+#voted-msg{font-size:clamp(14px,3.5vw,20px);color:#0f0;margin-top:12px;display:none}
+.replay-btn{font-family:'Courier New',monospace;font-size:13px;color:#666;background:none;border:1px solid #333;padding:8px 20px;cursor:pointer;margin-top:15px}
+.replay-btn:hover{color:#fff;border-color:#fff}
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="end-screen">
+  <div class="box">
+    <h1>PRELETELS!</h1>
+    <div class="venue">BIKE JESUS</div>
+    <div class="fscore" id="final-score">SCORE: 0</div>
+    <div class="question">Kdy muzes?</div>
+    <div class="dates">
+      <button class="date-btn" id="btn-94">9.4.</button>
+      <button class="date-btn" id="btn-104">10.4.</button>
+    </div>
+    <div id="voted-msg"></div>
+    <button class="replay-btn" id="btn-replay">HRAT ZNOVU</button>
+  </div>
+</div>
+
+<script>
+const C = document.getElementById('c');
+const X = C.getContext('2d');
+let W, H;
+
+function resize() {
+  W = C.width = window.innerWidth;
+  H = C.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ====== WAVES ======
+const WAVES = [
+  { name:'BERLIN',    color:'#ff00ff', ec:'#ff44ff', bc:'#ff88ff', rows:4, cols:7, speed:1.5, sr:0.006, desc:'Synthwave Invaders' },
+  { name:'MANSON',    color:'#ff0000', ec:'#ff3333', bc:'#ff6666', rows:4, cols:7, speed:1.8, sr:0.009, desc:'Antichrist Superstar' },
+  { name:'DUSAN VLK', color:'#00ff00', ec:'#33ff33', bc:'#88ff88', rows:5, cols:8, speed:2.2, sr:0.012, desc:'Vlci Smecka' }
+];
+
+// ====== STATE ======
+let state = 'start'; // start | waveIntro | playing | lost | won
+let score=0, lives=3, wave=0, introT=0;
+let player, bullets=[], enemies=[], eBullets=[], particles=[];
+let eDir=1;
+let stars=[];
+
+// ====== INPUT ======
+let keys={};
+let tL=false, tR=false, tF=false;
+
+window.addEventListener('keydown', e => { keys[e.key]=true; if(e.key===' ')e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.key]=false; });
+
+// Touch: left third=move left, middle third=move right, right third=fire
+// Use document-level listeners so touches are never missed
+function parseTouches(touchList) {
+  tL=false; tR=false; tF=false;
+  let sw = window.innerWidth;
+  for(let i=0; i<touchList.length; i++) {
+    let rx = touchList[i].clientX / sw;
+    if(rx < 0.33) tL=true;
+    else if(rx < 0.66) tR=true;
+    else tF=true;
+  }
+}
+
+document.addEventListener('touchstart', e => {
+  if(state==='start'||state==='lost') { startGame(); e.preventDefault(); return; }
+  e.preventDefault();
+  parseTouches(e.touches);
+}, {passive:false});
+
+document.addEventListener('touchmove', e => {
+  e.preventDefault();
+  parseTouches(e.touches);
+}, {passive:false});
+
+document.addEventListener('touchend', e => {
+  e.preventDefault();
+  parseTouches(e.touches);
+}, {passive:false});
+
+document.addEventListener('touchcancel', e => { tL=false; tR=false; tF=false; });
+
+// Click/tap to start or restart
+C.addEventListener('click', () => {
+  if(state==='start') startGame();
+  else if(state==='lost') startGame();
+});
+window.addEventListener('keydown', e => {
+  if(e.key==='Enter' && (state==='start'||state==='lost')) startGame();
+});
+
+function left()  { return keys['ArrowLeft']||keys['a']||tL; }
+function right() { return keys['ArrowRight']||keys['d']||tR; }
+function fire()  { return keys[' ']||keys['ArrowUp']||tF; }
+
+// ====== STARS ======
+function initStars() {
+  stars=[];
+  for(let i=0;i<120;i++) stars.push({ x:Math.random()*W, y:Math.random()*H, s:0.3+Math.random()*1.5, sz:Math.random()*2.5+0.5, b:0.3+Math.random()*0.7 });
+}
+initStars();
+
+function drawStars() {
+  for(let s of stars) {
+    s.y += s.s;
+    if(s.y>H){s.y=0;s.x=Math.random()*W;}
+    X.fillStyle=`rgba(255,255,255,${s.b})`;
+    X.fillRect(s.x,s.y,s.sz,s.sz);
+  }
+}
+
+// ====== DRAW TEXT HELPER ======
+function txt(text, x, y, size, color, align) {
+  X.save();
+  X.font = size+'px "Courier New"';
+  X.fillStyle = color;
+  X.textAlign = align||'center';
+  X.textBaseline = 'middle';
+  X.shadowColor = color;
+  X.shadowBlur = 15;
+  X.fillText(text, x, y);
+  X.restore();
+}
+
+// ====== PLAYER ======
+function mkPlayer() { return {x:W/2, y:H-90, w:36, h:26, spd:5, cd:0, inv:0}; }
+
+function drawPlayer() {
+  if(!player) return;
+  if(player.inv>0 && Math.floor(player.inv*8)%2===0) return;
+  X.save();
+  X.fillStyle='#0ff';
+  X.shadowColor='#0ff';
+  X.shadowBlur=15;
+  X.beginPath();
+  X.moveTo(player.x, player.y-player.h);
+  X.lineTo(player.x+player.w*0.5, player.y+player.h*0.4);
+  X.lineTo(player.x+player.w*0.15, player.y+player.h*0.15);
+  X.lineTo(player.x, player.y);
+  X.lineTo(player.x-player.w*0.15, player.y+player.h*0.15);
+  X.lineTo(player.x-player.w*0.5, player.y+player.h*0.4);
+  X.closePath();
+  X.fill();
+  // Flame
+  X.fillStyle='#ff6600';
+  X.shadowColor='#ff6600';
+  let fh=8+Math.random()*8;
+  X.beginPath();
+  X.moveTo(player.x-6,player.y+player.h*0.35);
+  X.lineTo(player.x,player.y+player.h*0.35+fh);
+  X.lineTo(player.x+6,player.y+player.h*0.35);
+  X.closePath();
+  X.fill();
+  X.restore();
+}
+
+// ====== ENEMIES ======
+function spawnEnemies(idx) {
+  let w=WAVES[idx]; enemies=[];
+  let gx=Math.min(55,(W-60)/w.cols);
+  let sx=(W-(w.cols-1)*gx)/2;
+  for(let r=0;r<w.rows;r++) for(let c=0;c<w.cols;c++) {
+    enemies.push({x:sx+c*gx, y:70+r*45, w:30, h:22, alive:true, color:w.ec});
+  }
+  eDir=1;
+}
+
+function updateEnemies() {
+  let w=WAVES[wave]; if(!w) return;
+  let hit=false;
+  for(let e of enemies) { if(!e.alive)continue; e.x+=eDir*w.speed; if(e.x<25||e.x>W-25)hit=true; }
+  if(hit) { eDir*=-1; for(let e of enemies) if(e.alive) e.y+=10; }
+  let alive=enemies.filter(e=>e.alive);
+  if(alive.length>0 && Math.random()<w.sr) {
+    let s=alive[Math.floor(Math.random()*alive.length)];
+    eBullets.push({x:s.x,y:s.y+15,spd:3.5+wave*0.8,color:w.bc});
+  }
+}
+
+function drawEnemies() {
+  for(let e of enemies) {
+    if(!e.alive) continue;
+    X.save();
+    X.fillStyle=e.color;
+    X.shadowColor=e.color;
+    X.shadowBlur=10;
+    if(wave===0) {
+      X.fillRect(e.x-e.w/2,e.y-e.h/2,e.w,e.h);
+      X.fillRect(e.x-e.w/2-6,e.y-4,6,12);
+      X.fillRect(e.x+e.w/2,e.y-4,6,12);
+      X.fillStyle='#000';
+      X.fillRect(e.x-7,e.y-3,5,5);
+      X.fillRect(e.x+3,e.y-3,5,5);
+    } else if(wave===1) {
+      X.beginPath();
+      X.moveTo(e.x,e.y-e.h/2-6);
+      X.lineTo(e.x+e.w/2+4,e.y);
+      X.lineTo(e.x+e.w/2-2,e.y+e.h/2);
+      X.lineTo(e.x-e.w/2+2,e.y+e.h/2);
+      X.lineTo(e.x-e.w/2-4,e.y);
+      X.closePath();
+      X.fill();
+      X.strokeStyle='#000'; X.lineWidth=2;
+      X.beginPath();
+      X.moveTo(e.x-8,e.y-5);X.lineTo(e.x-3,e.y);
+      X.moveTo(e.x-3,e.y-5);X.lineTo(e.x-8,e.y);
+      X.moveTo(e.x+3,e.y-5);X.lineTo(e.x+8,e.y);
+      X.moveTo(e.x+8,e.y-5);X.lineTo(e.x+3,e.y);
+      X.stroke();
+    } else {
+      X.beginPath();
+      X.moveTo(e.x-e.w/2-5,e.y-e.h/2-10);
+      X.lineTo(e.x-e.w/2+5,e.y-e.h/2+3);
+      X.lineTo(e.x-5,e.y-e.h/2);
+      X.lineTo(e.x+5,e.y-e.h/2);
+      X.lineTo(e.x+e.w/2-5,e.y-e.h/2+3);
+      X.lineTo(e.x+e.w/2+5,e.y-e.h/2-10);
+      X.lineTo(e.x+e.w/2,e.y+e.h/2);
+      X.lineTo(e.x,e.y+e.h/2+6);
+      X.lineTo(e.x-e.w/2,e.y+e.h/2);
+      X.closePath();
+      X.fill();
+      X.fillStyle='#ff0';
+      X.fillRect(e.x-9,e.y-5,6,5);
+      X.fillRect(e.x+3,e.y-5,6,5);
+    }
+    X.restore();
+  }
+}
+
+// ====== BULLETS ======
+function drawBullets() {
+  X.save(); X.shadowBlur=8;
+  for(let b of bullets) { X.fillStyle='#0ff'; X.shadowColor='#0ff'; X.fillRect(b.x-2,b.y-8,4,16); }
+  for(let b of eBullets) { X.fillStyle=b.color; X.shadowColor=b.color; X.fillRect(b.x-2.5,b.y-5,5,10); }
+  X.restore();
+}
+
+// ====== PARTICLES ======
+function boom(x,y,color,n) {
+  for(let i=0;i<n;i++) {
+    let a=Math.random()*Math.PI*2, sp=1+Math.random()*4;
+    particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:0.4+Math.random()*0.4,color,sz:1+Math.random()*3});
+  }
+}
+
+function drawParticles(dt) {
+  for(let p of particles) { p.x+=p.vx; p.y+=p.vy; p.life-=dt; }
+  particles=particles.filter(p=>p.life>0);
+  for(let p of particles) {
+    X.globalAlpha=Math.max(0,p.life*2);
+    X.fillStyle=p.color;
+    X.fillRect(p.x-p.sz/2,p.y-p.sz/2,p.sz,p.sz);
+  }
+  X.globalAlpha=1;
+}
+
+// ====== COLLISION ======
+function hit(ax,ay,aw,ah,bx,by,bw,bh) {
+  return Math.abs(ax-bx)<(aw+bw)/2 && Math.abs(ay-by)<(ah+bh)/2;
+}
+
+// ====== GAME FLOW ======
+function startGame() {
+  state='playing'; score=0; lives=3; wave=0;
+  player=mkPlayer(); bullets=[]; eBullets=[]; particles=[];
+  document.getElementById('end-screen').classList.remove('visible');
+  beginWave();
+}
+
+function beginWave() {
+  state='waveIntro';
+  introT=2.0;
+  spawnEnemies(wave);
+}
+
+function winGame() {
+  state='won';
+  document.getElementById('final-score').textContent='SCORE: '+score;
+  document.getElementById('voted-msg').style.display='none';
+  document.getElementById('end-screen').classList.add('visible');
+}
+
+function loseGame() { state='lost'; }
+
+// End screen buttons
+document.getElementById('btn-94').onclick=()=>{
+  let m=document.getElementById('voted-msg'); m.textContent='Jdes 9.4. — Uvidime se tam!'; m.style.display='block';
+};
+document.getElementById('btn-104').onclick=()=>{
+  let m=document.getElementById('voted-msg'); m.textContent='Jdes 10.4. — Uvidime se tam!'; m.style.display='block';
+};
+document.getElementById('btn-replay').onclick=()=>{ startGame(); };
+
+// ====== HUD ======
+function drawHUD() {
+  let w=WAVES[wave];
+  txt('SCORE: '+score, 10, 20, 16, '#0ff', 'left');
+  if(w) txt(w.name, W/2, 20, 16, '#ff6600', 'center');
+  let h='';
+  for(let i=0;i<lives;i++) h+='\u2665 ';
+  txt(h, W-10, 20, 18, '#ff0040', 'right');
+}
+
+// ====== DRAW SCREENS ======
+function drawStartScreen() {
+  X.fillStyle='rgba(0,0,0,0.75)';
+  X.fillRect(0,0,W,H);
+
+  txt('SPACE KONCERT', W/2, H*0.3, Math.min(48, W*0.08), '#ff0040');
+  txt('BERLIN // MANSON // DUSAN VLK', W/2, H*0.38, Math.min(20, W*0.035), '#ff6600');
+  txt('Prostrilej si cestu na koncert!', W/2, H*0.44, Math.min(16, W*0.03), '#888');
+
+  let isMobile = 'ontouchstart' in window;
+  if(isMobile) {
+    txt('OVLADANI:', W/2, H*0.54, 14, '#0ff');
+    txt('Leva tretina = VLEVO', W/2, H*0.58, 13, '#666');
+    txt('Prostredni tretina = VPRAVO', W/2, H*0.62, 13, '#666');
+    txt('Prava tretina = STRELBA', W/2, H*0.66, 13, '#666');
+  } else {
+    txt('OVLADANI:', W/2, H*0.54, 14, '#0ff');
+    txt('Sipky vlevo/vpravo = pohyb', W/2, H*0.58, 13, '#666');
+    txt('Mezernik = strelba', W/2, H*0.62, 13, '#666');
+  }
+
+  // Blink
+  let blink = Math.sin(Date.now()*0.005) > 0;
+  if(blink) txt('[ KLIKNI / TAPNI ]', W/2, H*0.75, Math.min(18, W*0.035), '#0ff');
+}
+
+function drawWaveIntro(dt) {
+  introT -= dt;
+  let w = WAVES[wave];
+  // Draw enemies and player behind the text
+  drawEnemies();
+  drawPlayer();
+
+  // Semi-transparent overlay
+  X.fillStyle='rgba(0,0,0,0.5)';
+  X.fillRect(0,0,W,H);
+
+  // Wave name
+  txt(w.name, W/2, H*0.4, Math.min(50, W*0.09), w.color);
+  txt(w.desc, W/2, H*0.47, Math.min(18, W*0.035), '#ff6600');
+
+  // Countdown
+  let sec = Math.ceil(introT);
+  txt(sec+'', W/2, H*0.55, 30, '#fff');
+
+  if(introT <= 0) state='playing';
+}
+
+function drawGameOver() {
+  X.fillStyle='rgba(0,0,0,0.7)';
+  X.fillRect(0,0,W,H);
+  txt('GAME OVER', W/2, H*0.4, Math.min(48, W*0.08), '#ff0040');
+  txt('SCORE: '+score, W/2, H*0.48, 20, '#888');
+  let blink = Math.sin(Date.now()*0.005) > 0;
+  if(blink) txt('[ KLIKNI / TAPNI ]', W/2, H*0.58, 16, '#0ff');
+}
+
+// ====== TOUCH ZONE INDICATORS ======
+function drawTouchZones() {
+  if(!('ontouchstart' in window)) return;
+  X.save();
+  X.globalAlpha=0.05;
+  // Left zone
+  X.fillStyle='#0ff';
+  X.fillRect(0, H*0.6, W*0.33, H*0.4);
+  // Middle zone
+  X.fillStyle='#0ff';
+  X.fillRect(W*0.33, H*0.6, W*0.33, H*0.4);
+  // Right zone
+  X.fillStyle='#f00';
+  X.fillRect(W*0.66, H*0.6, W*0.34, H*0.4);
+  X.globalAlpha=1;
+
+  X.font='11px "Courier New"';
+  X.fillStyle='rgba(0,255,255,0.2)';
+  X.textAlign='center';
+  X.fillText('\u2190', W*0.165, H-15);
+  X.fillText('\u2192', W*0.5, H-15);
+  X.fillStyle='rgba(255,0,0,0.2)';
+  X.fillText('FIRE', W*0.83, H-15);
+  X.restore();
+}
+
+// ====== MAIN LOOP ======
+let lt = performance.now();
+
+function loop(now) {
+  let dt = Math.min((now-lt)/1000, 0.05);
+  lt = now;
+
+  if(C.width!==window.innerWidth||C.height!==window.innerHeight) resize();
+
+  X.clearRect(0,0,W,H);
+  drawStars();
+
+  if(state==='start') {
+    drawStartScreen();
+  }
+
+  else if(state==='waveIntro') {
+    drawWaveIntro(dt);
+    drawHUD();
+  }
+
+  else if(state==='playing') {
+    // Input
+    if(left()) player.x-=player.spd;
+    if(right()) player.x+=player.spd;
+    player.x=Math.max(player.w/2+5, Math.min(W-player.w/2-5, player.x));
+
+    if(player.inv>0) player.inv-=dt;
+    if(player.cd>0) player.cd-=dt;
+
+    if(fire() && player.cd<=0) {
+      bullets.push({x:player.x, y:player.y-player.h});
+      player.cd=0.18;
+    }
+
+    // Bullets
+    for(let b of bullets) b.y-=8;
+    bullets=bullets.filter(b=>b.y>-20);
+    for(let b of eBullets) b.y+=b.spd;
+    eBullets=eBullets.filter(b=>b.y<H+20);
+
+    // Enemies
+    updateEnemies();
+
+    // Collision: bullets vs enemies
+    for(let b of bullets) {
+      for(let e of enemies) {
+        if(!e.alive) continue;
+        if(hit(b.x,b.y,4,16,e.x,e.y,e.w,e.h)) {
+          e.alive=false; b.y=-999;
+          score+=10*(wave+1);
+          boom(e.x,e.y,WAVES[wave].color,15);
+        }
+      }
+    }
+
+    // Collision: enemy bullets vs player
+    if(player.inv<=0) {
+      for(let b of eBullets) {
+        if(hit(b.x,b.y,5,10,player.x,player.y,player.w,player.h)) {
+          b.y=9999; lives--;
+          player.inv=2;
+          boom(player.x,player.y,'#0ff',10);
+          if(lives<=0) { boom(player.x,player.y,'#ff0',25); loseGame(); }
+        }
+      }
+    }
+
+    // Enemies too low
+    for(let e of enemies) {
+      if(e.alive && e.y+e.h/2>player.y-player.h) {
+        lives=0; boom(player.x,player.y,'#ff0',25); loseGame(); break;
+      }
+    }
+
+    // Wave clear
+    if(enemies.length>0 && enemies.every(e=>!e.alive)) {
+      wave++;
+      if(wave>=WAVES.length) winGame();
+      else { eBullets=[]; beginWave(); }
+    }
+
+    drawEnemies();
+    drawBullets();
+    drawPlayer();
+    drawTouchZones();
+    drawHUD();
+  }
+
+  else if(state==='lost') {
+    drawEnemies();
+    drawBullets();
+    drawGameOver();
+  }
+
+  // Particles always
+  drawParticles(dt);
+
+  requestAnimationFrame(loop);
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
